@@ -1,0 +1,12 @@
+.PHONY: all clean run
+
+all: initksocket
+
+initksocket: initksocket.c ksocket.h
+	@gcc initksocket.c -o initksocket -lpthread
+
+run: initksocket
+	@./initksocket
+
+clean: 
+	@rm -f initksocket

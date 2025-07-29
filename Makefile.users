@@ -1,0 +1,24 @@
+.PHONY: all clean run_user1 run_user2
+
+all: user1 user2
+
+user2: user2.c libksocket.a
+	@gcc user2.c -o user2 -L. -lksocket -lpthread
+
+user1: user1.c libksocket.a
+	@gcc user1.c -o user1 -L. -lksocket -lpthread
+
+ksocket.o: ksocket.c ksocket.h
+	gcc -c ksocket.c -o ksocket.o
+
+libksocket.a: ksocket.o
+	ar rcs libksocket.a ksocket.o
+
+run_user1: user1
+	@./user1
+
+run_user2: user2
+	@./user2
+
+clean:
+	@rm -f user1 user2 ksocket.o libksocket.a

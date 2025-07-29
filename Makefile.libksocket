@@ -1,0 +1,7 @@
+
+lib: ksocket.c ksocket.h
+	@gcc -c ksocket.c
+	@ar rcs initksocket.a ksocket.o
+
+clean:
+	@rm -f initksocket.a ksocket.o

@@ -1,0 +1,148 @@
+------------------------------------------------------------
+KTP Implementation Documentation
+------------------------------------------------------------
+
+Overview:
+---------
+The KTP (K-Transport Protocol) library implements a reliable, window-based message transfer mechanism on top of UDP. It guarantees in-order and reliable delivery of fixed-size packets (512 bytes total) between endpoints. This is achieved by maintaining separate sender and receiver windows (each with a capacity of 10 messages), using acknowledgments (ACKs), retransmitting unacknowledged messages after a timeout of 5 seconds, and employing shared memory to manage up to 25 concurrent sockets. Synchronization among threads and processes is managed using semaphores.
+
+Global Constants and Data Structures:
+---------------------------------------
+Message and Buffer Parameters:
+  - MSG_SIZE: 512 bytes (total packet size)
+  - SENDING_BUFFER: 10 messages (sender buffer capacity)
+  - RECVING_BUFFER: 10 messages (receiver buffer capacity)
+  - NUM_SOCKETS: 25 (maximum number of concurrent sockets)
+  - MX_MSGS: 10 (used for sequence number wrap-around)
+  - T: 5 seconds (timeout duration for retransmission)
+  - Prob: 0.02 (drop probability to simulate packet loss)
+
+Commands and Usage:
+------------------------------------------------------------
+To build the initialization process:     
+    make -f Makefile.initksocket
+    make -f Makefile.initksocket run
+
+For Library:
+    make -f Makefile.libksocket
+
+To run user1 & user2:
+    make -f Makefile.users 
+    make -f Makefile.users run_user2
+    make -f Makefile.users run_user1
+
+------------------------------------------------------------
+
+Data Structures:
+----------------
+
+1. KtpSocket:
+   - Fields:
+       available      : Flag indicating if the socket slot is in use (0 = free, 1 = allocated)
+       process_id     : Process ID of the socket owner
+       udp_socket_id  : Underlying UDP socket descriptor
+       other_end_addr : sockaddr_in structure holding the remote endpoint’s address
+
+   - Buffers:
+       send_buffer[10][512] : Buffer for outgoing messages
+       recv_buffer[10][512] : Buffer for incoming messages
+       last_sent_time[10]   : Records the last transmission time for each message
+
+   - Sender Window (swnd):
+       size            : Current sender window size (initialized to 10)
+       sequence_num[10]: Array of sequence numbers corresponding to messages in the send buffer
+       start_seq_num   : Index marking the start of valid sequence numbers in the send buffer
+       next_seq_num    : Next sequence number to be assigned for a new outgoing message
+       start_window    : Index indicating the start of the current sending window
+       end_window      : Index indicating the end of the current sending window
+       acked[10]       : Array indicating whether each message has been acknowledged (1) or not (0)
+
+   - Receiver Window (rwnd):
+       size              : Number of messages currently stored in the receiver buffer
+       index_next          : Next free index in the receiver buffer
+       next_expected_seq : Sequence number expected for the next in-order message
+       read_seq_num      : Sequence number of the message next delivered to the application
+       received[10]      : Array marking the reception status of each buffer slot (1 if received, 0 otherwise)
+       recv_seq_num[10]  : Array storing the sequence numbers of the received messages
+
+2. SharedKtp:
+   - Contains an array of NUM_SOCKETS KtpSocket structures.
+   - Used to manage all active KTP sockets in shared memory.
+
+3. KtpPacket:
+   - Fields:
+       type          : Packet type (0 for ACK, 1 for data message)
+       seq_num       : Sequence number of the packet
+       recv_buf_size : Receiver’s available buffer size (piggybacked in ACK packets)
+       data          : Payload data; its size equals MSG_SIZE minus the size of the header (three integers)
+
+4. SocketInfo:
+   - Fields:
+       sock_id   : Identifier for the socket (used during creation and binding)
+       IP        : Pointer to a string representing the IP address
+       port      : Port number
+       errno_val : Error number set when an operation fails
+
+Function Prototypes:
+--------------------
+- int k_socket(int domain, int type, int flags);
+    Creates a new KTP socket by allocating a slot in shared memory and initializing a UDP socket.
+
+- void Variable_Initialization();
+    Initializes semaphores and attaches the shared memory segments for global socket information and shared KTP structures.
+
+- int k_bind(int sock_id, char *src_IP, int src_port, char *dst_IP, int dst_port);
+    Binds a KTP socket to a specified source address and port, and sets the destination address and port.
+
+- int k_sendto(int sock_id, char *msg, size_t len);
+    Sends a message through the specified KTP socket by copying the data into the sender buffer and managing sequence numbers.
+
+- int k_recvfrom(int sock_id, char *buf, size_t len);
+    Receives an in-order message from the receiver buffer and shifts the buffer accordingly.
+
+- int k_close(int sock_id);
+    Closes the KTP socket, marking the slot as available for reuse.
+
+------------------------------------------------------------
+File: ksocket.c
+------------------------------------------------------------
+ksocket.c provides the core API for KTP operations:
+  - create_semaphore(): Safely opens named semaphores.
+  - Variable_Initialization(): Sets up semaphores and shared memory.
+  - k_socket(): Creates a new KTP socket and initializes the sender window.
+  - k_bind(): Binds the socket to specified local and remote addresses.
+  - k_sendto(): Copies message data into the send buffer in chunks (up to 510 bytes per slot) and sends packets.
+  - k_recvfrom(): Retrieves messages from the receiver buffer and shifts remaining messages.
+  - k_close(): Marks the socket as free.
+
+------------------------------------------------------------
+File: initksocket.c
+------------------------------------------------------------
+initksocket.c sets up the environment and manages the ongoing operations of KTP:
+  - init_shared_resources(): Initializes semaphores and attaches shared memory.
+  - G_thread(): Garbage collection thread that periodically cleans up sockets whose processes are no longer active.
+  - R_thread(): Receiver thread that monitors UDP sockets with select(), processes incoming data, and sends ACKs for in-order messages.
+  - S_thread(): Sender thread that handles retransmissions of timed-out messages and dispatches new messages when window space is available.
+  - cleanup_resources(): Cleans up shared memory and semaphores upon termination.
+  - main(): Entry point; initializes resources, spawns threads, and continuously processes socket creation and binding requests.
+
+------------------------------------------------------------
+Results Table for Varying p Values (for a 4.6 KB file with 200 lines)
+------------------------------------------------------------
+| p Value | Count of Transmissions |
+|---------|------------------------|
+| 0.02    | 424                    |
+| 0.05    | 504                    |
+| 0.08    | 498                    |
+| 0.1     | 518                    |
+| 0.2     | 977                    |
+| 0.3     | 1007                   |
+| 0.6     | 8080                   |
+------------------------------------------------------------
+
+Notes:
+- The library simulates an unreliable communication channel by dropping packets with a probability defined by Prob.
+- The protocol employs a sliding window mechanism to maintain flow control and ensures that messages are delivered reliably and in order.
+- The static library (libksocket.a) is built from ksocket.c and ksocket.h and is linked with user applications (user1.c and user2.c).
+
+------------------------------------------------------------
